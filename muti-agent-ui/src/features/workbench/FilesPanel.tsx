@@ -1,9 +1,16 @@
-import { useState } from 'react';
+import { Suspense, lazy, useState } from 'react';
 import { Empty, Skeleton, Tree } from 'antd';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../../shared/api/endpoints';
 import { Panel } from './Panel';
 import { ErrorState } from '../../shared/ui/ErrorState';
+
+const XMarkdown = lazy(() =>
+  import('@ant-design/x-markdown').then((module) => ({ default: module.XMarkdown })),
+);
+
+const MARKDOWN_EXT = /\.(md|markdown)$/i;
+const HTML_EXT = /\.(html?|htm)$/i;
 
 export function FilesPanel() {
   const [path, setPath] = useState<string | null>(null);
@@ -14,6 +21,10 @@ export function FilesPanel() {
     enabled: Boolean(path),
     retry: false,
   });
+
+  const content = contentQuery.data?.content ?? '';
+  const isMarkdown = path ? MARKDOWN_EXT.test(path) : false;
+  const isHtml = path ? HTML_EXT.test(path) : false;
 
   return (
     <Panel title="文件" extra={<span className="muted">只读</span>}>
@@ -48,7 +59,24 @@ export function FilesPanel() {
               <code>{contentQuery.data.path}</code>
               <span className="muted">{contentQuery.data.size} B</span>
             </div>
-            <pre className="code-block file-viewer__body">{contentQuery.data.content}</pre>
+            {isMarkdown && (
+              <div className="file-viewer__render">
+                <Suspense fallback={<pre className="code-block file-viewer__body">{content}</pre>}>
+                  <XMarkdown content={content} openLinksInNewTab />
+                </Suspense>
+              </div>
+            )}
+            {isHtml && (
+              <iframe
+                className="file-viewer__frame"
+                title={contentQuery.data.path}
+                sandbox=""
+                srcDoc={content}
+              />
+            )}
+            {!isMarkdown && !isHtml && (
+              <pre className="code-block file-viewer__body">{content}</pre>
+            )}
           </>
         )}
       </div>

@@ -26,6 +26,39 @@ import { createSseParser } from '../events/parse';
 
 const P = '/api';
 
+/** Agent 文件工具的沙箱根目录（服务器文件工具全部限制在其内）。 */
+export interface WorkspaceInfo {
+  root: string;
+  name: string;
+  source: 'saved' | 'env' | 'default';
+  busy: boolean;
+  can_switch: boolean;
+}
+
+/** 拉 artifact 原始响应：文本/二进制共用，带鉴权与统一错误。 */
+async function fetchArtifact(artifactId: string): Promise<Response> {
+  const headers: Record<string, string> = {};
+  const token = authToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch(apiUrl(`${P}/artifacts/${encodeURIComponent(artifactId)}`), {
+    headers,
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    let body: { code?: string; message?: string } = {};
+    try {
+      body = (JSON.parse(text) as { error?: { code?: string; message?: string } }).error ?? {};
+    } catch {
+      body = {};
+    }
+    throw new ApiError(response.status, {
+      code: body.code ?? 'E_ARTIFACT_LOAD_FAILED',
+      message: body.message ?? `产物加载失败（HTTP ${response.status}）`,
+    });
+  }
+  return response;
+}
+
 export const api = {
   // ---------- meta ----------
   meta(): Promise<Meta> {
@@ -219,33 +252,46 @@ export const api = {
   },
 
   async getArtifactText(artifactId: string): Promise<string> {
-    if (USE_MOCK) return Promise.reject(new ApiError(404, { code: 'E_ARTIFACT_NOT_FOUND', message: 'Mock 没有产物' }));
-    const headers: Record<string, string> = {};
-    const token = authToken();
-    if (token) headers.Authorization = `Bearer ${token}`;
-    const response = await fetch(apiUrl(`${P}/artifacts/${encodeURIComponent(artifactId)}`), {
-      headers,
-    });
-    if (!response.ok) {
-      const text = await response.text();
-      let body: { code?: string; message?: string } = {};
-      try {
-        body = (JSON.parse(text) as { error?: { code?: string; message?: string } }).error ?? {};
-      } catch {
-        body = {};
-      }
-      throw new ApiError(response.status, {
-        code: body.code ?? 'E_ARTIFACT_LOAD_FAILED',
-        message: body.message ?? `产物加载失败（HTTP ${response.status}）`,
-      });
-    }
+    const response = await fetchArtifact(artifactId);
     return response.text();
+  },
+
+  async getArtifactBlob(artifactId: string): Promise<Blob> {
+    const response = await fetchArtifact(artifactId);
+    return response.blob();
   },
 
   getUsage(days = 7): Promise<UsageReport> {
     return USE_MOCK
       ? Promise.resolve(mock.mockGetUsage(days))
       : http.get<UsageReport>(`${P}/usage?days=${days}`);
+  },
+
+  // ---------- workspace ----------
+  getWorkspace(): Promise<WorkspaceInfo> {
+    if (USE_MOCK) {
+      return Promise.resolve({
+        root: 'C:\\demo\\workspace',
+        name: 'workspace',
+        source: 'default',
+        busy: false,
+        can_switch: false,
+      });
+    }
+    return http.get<WorkspaceInfo>(`${P}/workspace`);
+  },
+
+  switchWorkspace(path: string): Promise<WorkspaceInfo> {
+    if (USE_MOCK) {
+      return Promise.resolve({
+        root: path,
+        name: path.split(/[\\/]/).pop() || 'workspace',
+        source: 'saved',
+        busy: false,
+        can_switch: true,
+      });
+    }
+    return http.post<WorkspaceInfo>(`${P}/workspace/switch`, { path });
   },
 };
 

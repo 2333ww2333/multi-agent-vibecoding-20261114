@@ -6,6 +6,8 @@ const LABEL: Record<Artifact['kind'], string> = {
   html: 'HTML',
   markdown: 'Markdown',
   text: '文本',
+  xlsx: 'Excel',
+  pdf: 'PDF',
 };
 
 export function ArtifactLinks({ artifacts }: { artifacts: Artifact[] }) {

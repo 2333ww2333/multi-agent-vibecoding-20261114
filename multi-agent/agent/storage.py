@@ -90,6 +90,16 @@ class FileLock:
                         f"若确认没有其他进程在用，可删除该 .lock 文件。"
                     )
                 time.sleep(self.poll + random.random() * self.poll)
+            except PermissionError:
+                # Windows：锁文件正被其他线程/进程打开时，O_EXCL 会抛
+                # PermissionError 而非 FileExistsError —— 视为"锁被占用"，重试。
+                if time.monotonic() >= deadline:
+                    raise LockTimeout(
+                        f"获取文件锁超时（{self.timeout}s）：{self.path}。"
+                        f"若确认没有其他进程在用，可删除该 .lock 文件。"
+                    )
+                self._break_if_stale()
+                time.sleep(self.poll + random.random() * self.poll)
 
     def release(self) -> None:
         if self._fd is not None:

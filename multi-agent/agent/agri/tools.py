@@ -22,8 +22,16 @@ MAX_QUERY_CHARS = 200
 MAX_TITLE_CHARS = 200
 MAX_QUESTION_CHARS = 1000
 MAX_NOTES_CHARS = 2000
-MAX_SEARCH_PER_RUN = 2
+MAX_SEARCH_PER_RUN = 4   # 兜底值；实际取 settings.agri.max_search_per_turn
 MAX_EXPORT_PER_RUN = 1
+
+
+def _turn_limit(kb: Any, key: str, fallback: int) -> int:
+    """单轮调用上限：优先读配置（kb.settings.agri.<key>），异常时用兜底值。"""
+    try:
+        return max(1, int(getattr(kb.settings.agri, key, fallback)))
+    except (TypeError, ValueError, AttributeError):
+        return fallback
 
 
 def _get_kb(ctx: Any) -> AgriKnowledgeBase:
@@ -53,9 +61,10 @@ def search_agri_kb(ctx: Any, query: str, disease: str = "", time: str = "",
         raise ToolError("E_TOOL_INVALID_ARGS", "query 不能为空")
     if len(query) > MAX_QUERY_CHARS:
         raise ToolError("E_TOOL_INVALID_ARGS", f"query 最长 {MAX_QUERY_CHARS} 字")
-    _bump(ctx, "agri_search_calls", MAX_SEARCH_PER_RUN)
 
     kb = _get_kb(ctx)
+    _bump(ctx, "agri_search_calls", _turn_limit(kb, "max_search_per_turn", MAX_SEARCH_PER_RUN))
+
     try:
         limit = int(top_k)
     except (TypeError, ValueError):
@@ -100,10 +109,11 @@ def _validate_charts(charts: list[str] | None) -> list[str]:
 
 def export_agri_report(ctx: Any, title: str, question: str, doc_ids: list[str],
                        charts: list[str] | None = None, notes: str = "",
-                       retrieval_query: str = "") -> str:
+                       retrieval_query: str = "", format: str = "html") -> str:
     title = str(title or "").strip()
     question = str(question or "").strip()
     notes = str(notes or "").strip()
+    fmt = str(format or "html").strip().lower()
     if not title or len(title) > MAX_TITLE_CHARS:
         raise ToolError("E_TOOL_INVALID_ARGS", f"title 必填且不超过 {MAX_TITLE_CHARS} 字")
     if not question or len(question) > MAX_QUESTION_CHARS:
@@ -127,7 +137,7 @@ def export_agri_report(ctx: Any, title: str, question: str, doc_ids: list[str],
     if len(wanted) > max_docs:
         raise ToolError(E_REPORT_TOO_MANY_DOCS, f"doc_ids 最多 {max_docs} 个")
 
-    _bump(ctx, "agri_export_calls", MAX_EXPORT_PER_RUN)
+    _bump(ctx, "agri_export_calls", _turn_limit(kb, "max_export_per_turn", MAX_EXPORT_PER_RUN))
 
     last = _last_result(ctx)
     if retrieval_query.strip():
@@ -163,11 +173,13 @@ def export_agri_report(ctx: Any, title: str, question: str, doc_ids: list[str],
     )
     try:
         assert kb.exporter is not None
-        payload = kb.exporter.export(report)
+        payload = kb.exporter.export(report, fmt=fmt)
     except ReportExportError as exc:
         raise ToolError(exc.code, exc.message) from exc
     except OSError as exc:
         raise ToolError("E_REPORT_WRITE_FAILED", f"报告写入失败：{exc}") from exc
+    except RuntimeError as exc:
+        raise ToolError("E_REPORT_RENDER_FAILED", f"报告渲染失败：{exc}") from exc
 
     ctx.scratch["agri_last_report"] = payload
     sink = ctx.scratch.get("artifact_sink")
@@ -175,7 +187,7 @@ def export_agri_report(ctx: Any, title: str, question: str, doc_ids: list[str],
         try:
             artifact = sink(
                 path=payload["path"],
-                kind="html",
+                kind=fmt,
                 title=title,
                 root=str(kb.exporter.report_root()) if kb.exporter else None,
                 filename=payload.get("filename"),
@@ -191,30 +203,37 @@ def build_tool_specs(_service: AgriKnowledgeBase) -> list[ToolSpec]:
         ToolSpec(
             name="search_agri_kb",
             description=(
-                "检索农业病虫害知识库，返回带 [K#] 与 doc 的证据。"
-                "回答症状、发生时期、防治方法前必须先调用；"
+                "检索农业知识库（BM25 + 向量混合），返回带 [K#] 与 doc 的证据。"
+                "回答农业种植、病虫害、生活常识等问题前必须先调用；"
                 "没有结果时返回 no_evidence，不要凭记忆编造。"
             ),
             input_schema={
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "病害名 + 症状/时期/防治关键词"},
-                    "disease": {"type": "string", "description": "可选，病害/虫害名，如 香蕉冠腐病"},
-                    "time": {"type": "string", "description": "可选，时期，如 香蕉采后 / 8～9月 / 苗期"},
+                    "query": {"type": "string", "description": "问题或关键词，如 小麦锈病怎么防治"},
+                    "disease": {
+                        "type": "string",
+                        "description": "可选，病害/虫害名（仅旧版病虫害语料生效；问答语料忽略此参数）",
+                    },
+                    "time": {
+                        "type": "string",
+                        "description": "可选，时期（仅旧版病虫害语料生效；问答语料忽略此参数）",
+                    },
                     "top_k": {"type": "integer", "description": "返回条数，默认 5，最大 8", "default": 5},
                 },
                 "required": ["query"],
             },
             handler=search_agri_kb,
             risk="read",
-            timeout_s=10.0,
+            timeout_s=15.0,
             max_output_chars=8000,
         ),
         ToolSpec(
             name="export_agri_report",
             description=(
-                "把本次检索到的农业病虫害证据生成自包含 HTML 报告，写入桌面 AgriReports 文件夹。"
-                "必须先用 search_agri_kb 获取 doc_ids；不能指定路径或 HTML。"
+                "把本次检索到的农业知识库证据生成报告（html/xlsx/pdf），"
+                "写入桌面 AgriReports 文件夹。必须先用 search_agri_kb 获取 doc_ids；"
+                "不能指定路径或报告内容。"
             ),
             input_schema={
                 "type": "object",
@@ -230,13 +249,18 @@ def build_tool_specs(_service: AgriKnowledgeBase) -> list[ToolSpec]:
                         "items": {"type": "string"},
                         "description": "本次检索结果中的 doc，最多 12 个",
                     },
+                    "format": {
+                        "type": "string",
+                        "enum": ["html", "xlsx", "pdf"],
+                        "description": "报告格式，默认 html；Excel 用 xlsx，可打印用 pdf",
+                    },
                     "charts": {
                         "type": "array",
                         "items": {
                             "type": "string",
                             "enum": sorted(CHART_TYPES),
                         },
-                        "description": "要包含的图表；默认 source_table",
+                        "description": "要包含的图表（仅 html）；默认 source_table",
                     },
                     "notes": {"type": "string", "description": "可选，2–4 句纯文本摘要；不要传 HTML"},
                 },
@@ -244,7 +268,7 @@ def build_tool_specs(_service: AgriKnowledgeBase) -> list[ToolSpec]:
             },
             handler=export_agri_report,
             risk="write",
-            timeout_s=20.0,
+            timeout_s=30.0,
             max_output_chars=3000,
         ),
     ]

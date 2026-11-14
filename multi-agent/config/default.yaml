@@ -48,3 +48,5 @@ agri:
   min_score: 1.0
   max_doc_ids: 12
   max_report_bytes: 5242880
+  max_search_per_turn: 4   # 单轮知识库检索上限；检索为本地调用，此限只防模型循环刷检索
+  max_export_per_turn: 1

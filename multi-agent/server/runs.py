@@ -224,7 +224,9 @@ class RunManager:
             normalized = "html"
         if normalized in {"md", "markdown"}:
             normalized = "markdown"
-        if normalized not in {"html", "markdown", "text"}:
+        if normalized in {"excel", "xls"}:
+            normalized = "xlsx"
+        if normalized not in {"html", "markdown", "text", "xlsx", "pdf"}:
             normalized = "text"
         artifact_id = new_web_id("art")
         data = self.store.create_artifact(

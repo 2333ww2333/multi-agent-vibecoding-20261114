@@ -35,7 +35,7 @@ export interface Usage {
   output_tokens: number;
 }
 
-export type ArtifactKind = 'html' | 'markdown' | 'text';
+export type ArtifactKind = 'html' | 'markdown' | 'text' | 'xlsx' | 'pdf';
 
 export interface Artifact {
   id: string;

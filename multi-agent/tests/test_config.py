@@ -59,6 +59,19 @@ def test_env_casts_and_bad_values_are_ignored(tmp_path, monkeypatch):
     assert Settings.load(root=tmp_path).llm.max_tokens == 8000   # 回落默认值
 
 
+def test_agri_turn_limits_default_and_env(tmp_path, monkeypatch):
+    """检索/导出单轮上限：默认放宽到 4/1，可用 AGRI_MAX_SEARCH_PER_TURN 覆盖。"""
+    settings = Settings.load(root=tmp_path)
+    assert settings.agri.max_search_per_turn == 4
+    assert settings.agri.max_export_per_turn == 1
+
+    monkeypatch.setenv("AGRI_MAX_SEARCH_PER_TURN", "6")
+    assert Settings.load(root=tmp_path).agri.max_search_per_turn == 6
+
+    monkeypatch.setenv("AGRI_MAX_SEARCH_PER_TURN", "oops")
+    assert Settings.load(root=tmp_path).agri.max_search_per_turn == 4   # 坏值回落
+
+
 def test_base_url_env_wins(tmp_path, monkeypatch):
     monkeypatch.setenv("DEEPSEEK_BASE_URL", "https://gateway.example.com/v1")
     assert Settings.load(root=tmp_path).llm.effective_base_url() == \

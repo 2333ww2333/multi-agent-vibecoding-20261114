@@ -63,10 +63,16 @@ def get_artifact(request: Request, artifact_id: str) -> Response:
         "html": "text/html; charset=utf-8",
         "markdown": "text/markdown; charset=utf-8",
         "text": "text/plain; charset=utf-8",
+        "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "pdf": "application/pdf",
     }.get(kind, "application/octet-stream")
+    disposition = "inline"
+    if kind in {"xlsx", "pdf"}:
+        # xlsx 浏览器无法预览，走下载；pdf 浏览器内置 viewer 可 inline
+        disposition = "attachment" if kind == "xlsx" else "inline"
     headers = {
         "X-Content-Type-Options": "nosniff",
-        "Content-Disposition": f"inline; filename*=UTF-8''{quote(artifact['filename'])}",
+        "Content-Disposition": f"{disposition}; filename*=UTF-8''{quote(artifact['filename'])}",
     }
     if kind == "html":
         headers["Content-Security-Policy"] = (

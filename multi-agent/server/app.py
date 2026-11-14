@@ -39,7 +39,12 @@ from .workspace import Workspace
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    settings = Settings.load(root=CONFIG.workspace_root)
+    # 工作区优先级：界面保存的选择 > MA_WORKSPACE_ROOT 环境变量 > 默认（后端目录）
+    root = CONFIG.workspace_root
+    saved = workspace_routes.load_saved_root()
+    if saved is not None:
+        root = saved
+    settings = Settings.load(root=root)
     settings.ensure_dirs()
 
     store = Store(CONFIG.db_path)
@@ -153,11 +158,13 @@ from .routes import (  # noqa: E402  (放在异常处理器之后，避免循环
     sessions as sessions_routes,
     team as team_routes,
     usage as usage_routes,
+    workspace as workspace_routes,
 )
 
 for module in (
     meta_routes, sessions_routes, runs_routes, approvals_routes,
     artifacts_routes, board_routes, team_routes, files_routes, usage_routes,
+    workspace_routes,
 ):
     if module is meta_routes:
         app.include_router(module.router, prefix="/api")

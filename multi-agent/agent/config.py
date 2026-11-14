@@ -90,7 +90,12 @@ class LimitSettings(BaseModel):
 
 
 class AgriSettings(BaseModel):
-    """农业病虫害 RAG（默认关闭；没有语料时不影响主流程）。"""
+    """农业知识库 RAG（默认关闭；没有语料时不影响主流程）。
+
+    corpus_path 支持：
+    - data/agri/docs.zh.json：旧版病虫害语料（BM25 字段加权）
+    - 任意 .parquet 问答语料：需先跑 scripts/build_kb.py 构建产物到 kb_dir
+    """
 
     enabled: bool = False
     corpus_path: str = "data/agri/docs.zh.json"
@@ -99,6 +104,15 @@ class AgriSettings(BaseModel):
     min_score: float = 1.0
     max_doc_ids: int = 12
     max_report_bytes: int = 5_242_880
+    max_search_per_turn: int = 4         # 单轮 search_agri_kb 上限（防检索循环，非云端额度）
+    max_export_per_turn: int = 1         # 单轮 export_agri_report 上限
+    # ---- qa 模式（parquet 问答语料）----
+    kb_dir: str = "data/kb"              # build_kb.py 产物目录
+    embedding_model_dir: str = ""         # bge-small-zh-v1.5 本地模型目录
+    use_vector: bool = True                # 向量通道开关（缺产物自动降级 BM25）
+    vector_top_n: int = 50                 # 每路通道候选数（RRF 融合前）
+    rrf_k: int = 60                        # RRF 常数
+    vector_min_score: float = 0.35         # 向量通道无证据阈值（归一化余弦）
 
 
 class Settings(BaseModel):
@@ -159,8 +173,9 @@ class Settings(BaseModel):
         }
 
     def agri_corpus_path(self) -> Path:
+        """语料/知识库是项目资产：相对路径锚定 PROJECT_ROOT，不随工作区切换漂移。"""
         raw = Path(self.agri.corpus_path).expanduser()
-        return raw if raw.is_absolute() else (self.root / raw)
+        return raw if raw.is_absolute() else (PROJECT_ROOT / raw)
 
     def agri_report_dir(self) -> Path:
         """报告目录：显式配置优先，否则交给 exporter 自动找桌面。"""
@@ -169,6 +184,23 @@ class Settings(BaseModel):
             return Path("")
         path = Path(raw).expanduser()
         return path if path.is_absolute() else (self.root / path)
+
+    def agri_kb_dir(self) -> Path:
+        """qa 模式构建产物目录（scripts/build_kb.py 输出）。
+
+        同 corpus_path：相对路径锚定 PROJECT_ROOT，切换工作区不影响知识库加载。
+        """
+        raw = (self.agri.kb_dir or "data/kb").strip()
+        path = Path(raw).expanduser()
+        return path if path.is_absolute() else (PROJECT_ROOT / path)
+
+    def agri_embedding_model_dir(self) -> Path:
+        """embedding 模型目录：相对路径锚定 PROJECT_ROOT；未配置返回空 Path。"""
+        raw = (self.agri.embedding_model_dir or "").strip()
+        if not raw:
+            return Path("")
+        path = Path(raw).expanduser()
+        return path if path.is_absolute() else (PROJECT_ROOT / path)
 
 
 # ---------- 环境变量覆盖 ----------
@@ -182,8 +214,12 @@ _ENV_MAP: dict[str, tuple[str, type]] = {
     "MA_DAILY_TOKEN_BUDGET": ("limits.daily_token_budget", int),
     "AGRI_CORPUS_PATH": ("agri.corpus_path", str),
     "AGRI_REPORT_DIR": ("agri.report_dir", str),
+    "AGRI_KB_DIR": ("agri.kb_dir", str),
+    "AGRI_EMBEDDING_MODEL_DIR": ("agri.embedding_model_dir", str),
     "AGRI_TOP_K": ("agri.top_k", int),
     "AGRI_MIN_SCORE": ("agri.min_score", float),
+    "AGRI_MAX_SEARCH_PER_TURN": ("agri.max_search_per_turn", int),
+    "AGRI_MAX_EXPORT_PER_TURN": ("agri.max_export_per_turn", int),
 }
 
 _TRUE = {"1", "true", "yes", "on"}
@@ -219,4 +255,8 @@ def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
     agri_enabled = os.environ.get("AGRI_KB_ENABLED")
     if agri_enabled is not None and agri_enabled.strip() != "":
         _deep_set(result, "agri.enabled", agri_enabled.strip().lower() in _TRUE)
+
+    agri_vector = os.environ.get("AGRI_VECTOR_ENABLED")
+    if agri_vector is not None and agri_vector.strip() != "":
+        _deep_set(result, "agri.use_vector", agri_vector.strip().lower() in _TRUE)
     return result

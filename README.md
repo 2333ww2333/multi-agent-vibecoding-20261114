@@ -4,7 +4,7 @@
 
 - **后端**：Python 单进程、多线程 Agent 运行时 + FastAPI BFF + SSE
 - **前端**：React 18 + Ant Design 6 + Ant Design X
-- **能力**：RAG 知识库、工具调用、计划、看板、队友、收件箱、文件、token 账单、审批、HTML 报告预览
+- **能力**：RAG 混合检索（BM25 + 向量 int8）、工具调用、计划、看板、队友、收件箱、文件、token 账单、审批、HTML/Excel/PDF 报告
 
 前端是 [`muti-agent-ui`](muti-agent-ui/)，后端是 [`multi-agent`](multi-agent/)。
 
@@ -18,15 +18,17 @@ multi-agent-vibecoding-20261114/
 ├─ multi-agent/                  ← Python 后端
 │  ├─ agent/                     Agent 核心
 │  ├─ server/                    FastAPI BFF
-│  ├─ data/agri/                 农业语料（大文件不进 git）
+│  ├─ data/agri/                 本地数据目录（大文件不进 git）
 │  ├─ config/default.yaml        默认配置
 │  ├─ tests/                     后端测试
 │  └─ README.md                  后端详细说明
-└─ muti-agent-ui/                ← React 前端
-   ├─ src/
-   ├─ scripts/                   E2E 脚本
-   ├─ shots/                     README 截图
-   └─ README.md                  前端详细说明
+├─ muti-agent-ui/                ← React 前端
+│  ├─ src/
+│  ├─ scripts/                   E2E 脚本
+│  ├─ shots/                     README 截图
+│  └─ README.md                  前端详细说明
+├─ models/bge-small-zh-v1.5/     ← Embedding 模型（不进 git，见第 9 节下载）
+└─ kb/                           ← 知识库索引产物（不进 git，见第 9 节构建）
 ```
 
 ---
@@ -230,47 +232,135 @@ cd D:\Desktop\multi-agent-vibecoding-20261114\multi-agent
 
 ---
 
-## 9. 农业 RAG（可选）
+## 9. 农业 RAG（可选）：92.8 万条语料 + BM25/向量混合检索
 
 `.env` 中开启：
 
 ```dotenv
 AGRI_KB_ENABLED=1
+AGRI_CORPUS_PATH=../kb
+AGRI_KB_DIR=../kb
+AGRI_EMBEDDING_MODEL_DIR=../models/bge-small-zh-v1.5
 ```
 
-语料文件：
+### 9.1 检索方案
+
+| 项 | 说明 |
+|------|------|
+| 语料 | Chinese-QA-AFAF 中文农林牧渔问答数据集，927,864 条（id / prompt / response） |
+| 检索通道 | BM25（自研 numpy 倒排，480,534 词项）+ 向量（faiss **SQ8 int8 量化**，512 维） |
+| 融合 | RRF（Reciprocal Rank Fusion，k=60）；向量通道不可用时自动降级纯 BM25 |
+| Embedding | `bge-small-zh-v1.5`（BAAI），纯 CPU 推理，惰性加载 |
+| 内存占用 | int8 索引驻内存约 475MB；答案文本走 mmap 按行读，不进内存 |
+| 性能 | 启动加载约 2~3 秒，单次检索约 0.5 秒（首次含模型加载约 7 秒） |
+
+### 9.2 Fork 后从零跑通 RAG 的完整流程
+
+仓库只含代码，语料与模型不进 git（体积大），按下面 5 步操作。
+
+**步骤 1：安装 RAG 依赖**
+
+```powershell
+cd D:\path\to\multi-agent-vibecoding-20261114\multi-agent
+# 按第 3 节装好基础环境后，加装 kb 可选依赖（faiss / sentence-transformers / pyarrow / openpyxl / reportlab）
+uv pip install --python .\.venv\Scripts\python.exe -e ".[kb]"
+```
+
+**步骤 2：下载 Embedding 模型**（约 100MB，HuggingFace，国内可用 hf-mirror）
+
+> 注意：请在**仓库根目录**（`multi-agent` 的上一级）执行，模型最终位于
+> `models/bge-small-zh-v1.5/`，与步骤 5 的 `.env` 路径 `../models/bge-small-zh-v1.5` 对应。
+
+```powershell
+cd D:\path\to\multi-agent-vibecoding-20261114   # 仓库根目录
+pip install -U "huggingface_hub[cli]"
+$env:HF_ENDPOINT = "https://hf-mirror.com"   # 国内镜像，可选
+huggingface-cli download BAAI/bge-small-zh-v1.5 --local-dir models/bge-small-zh-v1.5
+```
+
+> 下载完成后 `models/bge-small-zh-v1.5/` 下应能看到 `config.json`、
+> `model.safetensors`、`tokenizer.json` 等文件。
+
+**步骤 3：准备语料 parquet**（约 172MB，三选一）
+
+- **方式 A · 本项目 Releases（推荐）**：到仓库的 Releases 页下载
+  `Chinese-QA-AFAF-train-v2.parquet`，放到任意本地路径；
+- **方式 B · HuggingFace 自取**（CC BY-SA 4.0）：本项目语料来自
+  [`Mxode/Chinese-QA-Agriculture_Forestry_Animal_Husbandry_Fishery`](https://huggingface.co/datasets/Mxode/Chinese-QA-Agriculture_Forestry_Animal_Husbandry_Fishery)（900K+ 农林牧渔问答），
+  train-v2 清洗版是 [`Mxode/Chinese-Instruct`](https://huggingface.co/datasets/Mxode/Chinese-Instruct)
+  的 Chinese-QA-AFAF 子集（jsonl，prompt/response 两列）。
+  转成 parquet（补一列 id）的参考脚本：
+
+  ```powershell
+  pip install datasets pandas pyarrow
+  python -c "
+  import pandas as pd, uuid
+  df = pd.read_json('hf://datasets/Mxode/Chinese-Instruct/Chinese-QA-AFAF/Chinese-QA-AFAF.jsonl', lines=True)
+  df = df[df['response'].str.len() >= 5].reset_index(drop=True)
+  df.insert(0, 'id', [uuid.uuid4().hex[:12] for _ in range(len(df))])
+  df = df[['id', 'prompt', 'response']]
+  df.to_parquet('Chinese-QA-AFAF-train-v2.parquet', index=False)
+  print(len(df))
+  "
+  ```
+
+- **方式 C · 你自己的数据**：任意领域的语料都行，只要最终是一个含
+  `id`、`prompt`、`response` 三列的 parquet 文件（id 唯一、response ≥ 5 字），
+  例如用 `pandas.DataFrame({'id': ..., 'prompt': ..., 'response': ...}).to_parquet(...)` 导出。
+
+**步骤 4：构建索引**（一次性，纯 CPU 编码 92.8 万条约 1 小时）
+
+```powershell
+.\.venv\Scripts\python.exe scripts\build_kb.py `
+    --parquet "D:\path\to\Chinese-QA-AFAF-train-v2.parquet" `
+    --model "D:\path\to\models\bge-small-zh-v1.5" `
+    --out "..\kb"
+```
+
+产物写入 `kb/`（文本块 + BM25 倒排 + fp16 向量 + faiss int8 索引 + `kb_meta.json`）。
+调试建议先加 `--limit 5000` 跑小样验证链路，再删掉重建全量。
+产物文件说明见 [`kb/README.md`](kb/README.md)。
+
+**步骤 5：配置并启动**
+
+```dotenv
+# multi-agent/.env 追加
+AGRI_KB_ENABLED=1
+AGRI_CORPUS_PATH=../kb
+AGRI_KB_DIR=../kb
+AGRI_EMBEDDING_MODEL_DIR=../models/bge-small-zh-v1.5
+```
+
+启动后端后日志出现即成功：
 
 ```text
-multi-agent/data/agri/docs.zh.json
+agri knowledge base loaded mode=qa records=927864 index=bm25+vector-rrf(int8) vector=True
 ```
 
-这个文件体积较大，且数据授权待确认，**没有提交到 git**。没有该文件时，农业工具不会启用，其他功能不受影响。
-
-启动日志应出现类似：
+对话里直接问：
 
 ```text
-agri knowledge base loaded records=6038 ...
+香蕉采后怎么防腐保鲜？用 3 条要点回答，每条带 [K#] 和来源 doc。
 ```
 
-示例：
+无证据时系统会明确拒答（"知识库没有足够依据"），不编造。
+
+> 注意：`kb_meta.json` 记录了语料 SHA-256；换语料后**必须重新构建索引**，
+> 直接复用旧产物会导致检索结果与语料不一致。
+
+### 9.5 报告导出（HTML / Excel / PDF / Markdown）
 
 ```text
-香蕉冠腐病采后怎么防治？用 3 条要点回答，每条带 [K#] 和来源 doc。
+把刚才的内容生成一份 Excel 报告 / PDF 报告放到桌面。
 ```
 
-生成报告：
+模型会调用 `export_agri_report`（`format` 可选 `html / xlsx / pdf`）：
 
-```text
-把刚才的内容生成一份简短 HTML 报告到桌面，只保留结论摘要和来源表。
-```
-
-报告默认写入：
-
-```text
-%USERPROFILE%\Desktop\AgriReports\
-```
-
-报告写入属于需要确认的操作，会弹审批；默认等待 180 秒。
+- 报告写入 `%USERPROFILE%\Desktop\AgriReports\`（可用 `AGRI_REPORT_DIR` 覆盖）；
+- 写入前弹审批确认，默认等待 180 秒；
+- 回答下方出现"查看报告"入口，右侧抽屉页内预览：
+  HTML / **Markdown** 直接渲染，PDF 内嵌预览，Excel 提供下载；
+- Excel 为 openpyxl 生成、PDF 为 reportlab 生成（中文字体内置回退），来源逐条可追溯。
 
 ---
 
@@ -293,6 +383,7 @@ agri knowledge base loaded records=6038 ...
 2. 看板上点“推进”修改任务状态。
 3. 给队友派活时，在对话里让 Lead 发 `task_assigned`，不要只点看板。
 4. 报告生成后，回答下方会出现“查看报告”，点击右侧预览。
+5. **设置页可切换工作区**（Agent 文件读写的沙箱根目录）：输入绝对路径点“切换”，立即生效并持久保存，重启后端沿用；有任务运行时不可切换。知识库/模型路径已锚定项目根，切换不受影响。
 
 ---
 
@@ -317,7 +408,7 @@ pnpm build
 
 当前状态：
 
-- 后端：**166 passed**
+- 后端：**193 passed**
 - 前端：**16 passed**
 - 前端 typecheck / lint / build 通过
 
@@ -346,11 +437,12 @@ pnpm build
 ## 13. 安全与边界
 
 - 不要提交 `.env`、`.venv`、`.team/`、`.web/`、`memory/`、`reports/`。
+- 大体积数据资产（`kb/` 索引产物、`models/` 模型、语料 parquet）已在根 `.gitignore` 排除，不进 git。
 - 桌面写入、危险命令走审批。
 - 文件工具限制在工作区内；桌面报告由专用工具生成。
 - 农业建议只复述知识库原文，不构成用药推荐。
-- 当前 RAG 是 BM25 记录级检索，不是向量数据库。
-- 当前报告是自包含 HTML；Excel/PDF 导出尚未实现。
+- 当前 RAG 是 BM25 + 向量（faiss int8）RRF 混合检索，向量通道不可用时自动降级纯 BM25。
+- 报告支持自包含 HTML、Excel（openpyxl）、PDF（reportlab）三种格式，由后端确定性生成。
 
 ---
 

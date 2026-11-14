@@ -18,6 +18,7 @@ from agent.agri.retriever import AgriRetriever
 from agent.agri.service import AgriKnowledgeBase
 from agent.agri.tools import export_agri_report, search_agri_kb
 from agent.config import PROJECT_ROOT
+from agent.tools.registry import ToolError
 from agent.context import AgentContext, AgentSpec
 from agent.hooks import build_default_hooks
 from agent.loop import AgentLoop
@@ -110,6 +111,32 @@ def test_search_tool_stores_last_result(kb):
     assert "[K1]" in text
     assert ctx.scratch["agri_last_retrieval"].results[0].doc == "2_1"
     assert ctx.scratch["agri_last_query"]
+
+
+def test_search_limit_default_four_per_turn(kb):
+    """回归：单轮检索上限默认放宽到 4 次（此前为 2），第 5 次才触发 E_TOOL_LIMIT。"""
+    assert kb.settings.agri.max_search_per_turn == 4
+    ctx = SimpleNamespace(agri_kb=kb, scratch={}, counters=SimpleNamespace(turns=0))
+    for i in range(4):
+        search_agri_kb(ctx, f"香蕉冠腐病 采后防治 变体{i}")
+    with pytest.raises(ToolError) as exc:
+        search_agri_kb(ctx, "香蕉冠腐病 采后防治 变体4")
+    assert exc.value.code == "E_TOOL_LIMIT"
+    assert "达到上限 4" in exc.value.message
+
+
+def test_search_limit_configurable_and_resets_per_turn(kb):
+    """上限可由 settings.agri.max_search_per_turn 调整；换轮计数桶自动重置。"""
+    kb.settings.agri.max_search_per_turn = 2
+    ctx = SimpleNamespace(agri_kb=kb, scratch={}, counters=SimpleNamespace(turns=0))
+    search_agri_kb(ctx, "香蕉冠腐病 采后防治")
+    search_agri_kb(ctx, "斜纹夜蛾 8～9月 防治")
+    with pytest.raises(ToolError) as exc:
+        search_agri_kb(ctx, "香蕉冠腐病 运输期间")
+    assert exc.value.code == "E_TOOL_LIMIT"
+    # 换一轮：按轮次分桶，自动重置，不需要清 scratch
+    ctx.counters.turns = 1
+    search_agri_kb(ctx, "香蕉冠腐病 采后防治")
 
 
 def test_report_export_and_escape(kb):

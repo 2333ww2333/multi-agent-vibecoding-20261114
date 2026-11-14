@@ -14,6 +14,12 @@ class AgriRecord:
     answer: str
     dedupe_key: str
     aliases: tuple[str, ...] = ()
+    # parquet 问答语料：prompt = 用户提问原文（disease/time 保持 "未标注"）
+    prompt: str = ""
+
+    @property
+    def is_qa(self) -> bool:
+        return bool(self.prompt)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -22,6 +28,7 @@ class AgriRecord:
             "time": self.time,
             "answer": self.answer,
             "aliases": list(self.aliases),
+            "prompt": self.prompt,
         }
 
 
@@ -35,6 +42,7 @@ class Evidence:
     answer: str
     score: float
     aliases: tuple[str, ...] = ()
+    prompt: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -46,6 +54,7 @@ class Evidence:
             "answer": self.answer,
             "score": round(self.score, 3),
             "aliases": list(self.aliases),
+            "prompt": self.prompt,
         }
 
 
@@ -98,8 +107,13 @@ class RetrievalResult:
             answer = item.answer.strip()
             if len(answer) > max_chars:
                 answer = answer[:max_chars] + "…"
-            lines.append(
-                f"\n[{item.citation}] doc={item.doc} | disease={item.disease} | time={item.time}\n{answer}"
-            )
+            if item.prompt:
+                head = f"[{item.citation}] doc={item.doc} | prompt={item.prompt}"
+            else:
+                head = (
+                    f"[{item.citation}] doc={item.doc} | disease={item.disease}"
+                    f" | time={item.time}"
+                )
+            lines.append(f"\n{head}\n{answer}")
         text = "\n".join(lines)
         return text[:6000]

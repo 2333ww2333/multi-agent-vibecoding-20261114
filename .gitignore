@@ -11,3 +11,17 @@ desktop.ini
 tmp/
 temp/
 _tmp/
+
+# 大体积数据资产（本地构建/下载，不进 git）
+kb/
+models/
+kb_build.log
+
+# 运行时数据（应用以本目录为工作区根时生成，不进 git）
+.team/
+memory/
+skills/
+templates/
+
+# WorkBuddy 助手的工作区数据（会话日志/skills，不属于项目）
+.workbuddy/
