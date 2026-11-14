@@ -1,0 +1,82 @@
+# ===== 环境与密钥 =====
+.env
+.env.*
+!.env.example
+
+# 证书 / 密钥 / 凭据
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+secrets/
+.aws/
+.ssh/
+
+# ===== Python =====
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+.eggs/
+build/
+dist/
+pip-wheel-metadata/
+.installed.cfg
+
+# ===== 测试 / 类型检查 / 覆盖率 =====
+.pytest_cache/
+.pytest_tmp/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+*.cover
+*.py,cover
+
+# ===== 运行时数据（不进 git，但可本地备份）=====
+memory/
+.team/
+.backup/
+.web/
+reports/
+deliverables/
+logs/
+*.log
+*.db
+*.sqlite
+*.sqlite3
+*.db-wal
+*.db-shm
+
+# 农业语料：体积大且授权待确认，不随仓库分发
+data/agri/docs.zh.json
+
+# ===== 临时文件 =====
+_tmp_storage/
+tmp/
+temp/
+*.bak
+*.corrupt
+*.orig
+*.rej
+*~
+
+# ===== 编辑器 / 操作系统 =====
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini

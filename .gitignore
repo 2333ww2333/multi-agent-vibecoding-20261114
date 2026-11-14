@@ -1,0 +1,13 @@
+# Monorepo 根目录
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.log
+*.bak
+
+# 临时文件
+tmp/
+temp/
+_tmp/

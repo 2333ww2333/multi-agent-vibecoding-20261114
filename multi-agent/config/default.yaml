@@ -1,0 +1,50 @@
+app:
+  name: multi-agent
+  workspace: "."
+  timezone: Asia/Shanghai
+  log_level: INFO
+
+llm:
+  provider: deepseek
+  model: deepseek-flash
+  api_key_env: DEEPSEEK_API_KEY
+  base_url: https://api.deepseek.com
+  base_url_env: DEEPSEEK_BASE_URL
+  max_tokens: 8000
+  temperature: 0.2
+  timeout_s: 120
+  max_retries: 4
+  retry_base_delay_s: 1.5
+  offline: false
+  fallback_models: []
+
+paths:
+  memory_dir: memory
+  skills_dir: skills
+  team_dir: .team
+  templates_dir: templates
+  audit_file: .team/audit.jsonl
+
+limits:
+  max_turns_per_task: 40
+  max_tool_calls_per_turn: 8
+  max_history_messages: 60
+  compact_threshold_messages: 28
+  compact_keep_recent: 10
+  compact_threshold_tokens: 90000
+  tool_output_limit_chars: 8000
+  subagent_max_concurrent: 4
+  subagent_max_summary_chars: 4000
+  teammate_max_turns: 12
+  teammate_poll_interval_s: 1.0
+  daily_token_budget: 200000000
+  command_timeout_s: 120
+
+agri:
+  enabled: false
+  corpus_path: data/agri/docs.zh.json
+  report_dir: ""
+  top_k: 5
+  min_score: 1.0
+  max_doc_ids: 12
+  max_report_bytes: 5242880
